@@ -259,6 +259,77 @@ async function saveTranscript(meetingTitle, transcriptArray, aliases, format, re
 let lastAutoSaveId = null;
 let autoSaveInProgress = false;
 
+// --- Live OPFS Backup ---
+let liveBackupFileName = null;
+let isCurrentlyCapturing = false;
+let liveDownloadFilename = null;
+let lastDiskWriteTime = 0;
+const DISK_WRITE_INTERVAL = 2 * 60 * 1000; // 2 minutes
+
+async function writeLiveDiskFile(transcript, meetingTitle) {
+    const now = Date.now();
+    if (now - lastDiskWriteTime < DISK_WRITE_INTERVAL) return;
+    lastDiskWriteTime = now;
+
+    if (!liveDownloadFilename) {
+        const sanitized = getSanitizedMeetingName(meetingTitle || 'Meeting').substring(0, 50);
+        const dateStr = new Date().toISOString().split('T')[0];
+        liveDownloadFilename = `Live-Captions/${dateStr}_${sanitized}_live.txt`;
+    }
+    const content = transcript.map(({ key, ...e }) => `[${e.Time}] ${e.Name}: ${e.Text}`).join('\n');
+    chrome.downloads.download({
+        url: `data:text/plain;charset=utf-8,${encodeURIComponent(content)}`,
+        filename: liveDownloadFilename,
+        saveAs: false,
+        conflictAction: 'overwrite'
+    });
+}
+
+async function writeLiveBackupToOPFS(transcript, meetingTitle, recordingStartTime) {
+    try {
+        if (!liveBackupFileName) {
+            // Restore from storage if SW was restarted mid-session
+            const stored = await chrome.storage.local.get('liveBackupFileName');
+            if (stored.liveBackupFileName) {
+                liveBackupFileName = stored.liveBackupFileName;
+            } else {
+                const sanitized = getSanitizedMeetingName(meetingTitle || 'Meeting').substring(0, 40);
+                liveBackupFileName = `live_${sanitized}_${Date.now()}.json`;
+                await chrome.storage.local.set({ liveBackupFileName });
+            }
+        }
+
+        const opfs = await navigator.storage.getDirectory();
+        const fileHandle = await opfs.getFileHandle(liveBackupFileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify({
+            meetingTitle: meetingTitle || 'Meeting',
+            recordingStartTime: recordingStartTime || new Date().toISOString(),
+            transcript: transcript.map(({ key, ...rest }) => rest),
+            lastUpdated: new Date().toISOString()
+        }));
+        await writable.close();
+        console.log(`[Live Backup] OPFS updated: ${transcript.length} captions`);
+    } catch (error) {
+        console.error('[Live Backup] OPFS write failed:', error);
+    }
+}
+
+async function cleanupLiveBackup() {
+    try {
+        const fileName = liveBackupFileName ||
+            (await chrome.storage.local.get('liveBackupFileName')).liveBackupFileName;
+        if (!fileName) return;
+
+        const opfs = await navigator.storage.getDirectory();
+        await opfs.removeEntry(fileName).catch(() => {});
+        await chrome.storage.local.remove('liveBackupFileName');
+        liveBackupFileName = null;
+    } catch (error) {
+        // Silent — file may already be gone
+    }
+}
+
 async function createViewerTab(transcriptArray) {
     await chrome.storage.local.set({ captionsToView: transcriptArray });
     chrome.tabs.create({ url: chrome.runtime.getURL('viewer.html') });
@@ -328,6 +399,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { speakerAliases } = await chrome.storage.session.get('speakerAliases');
 
         switch (message.message) {
+            case 'backup_transcript':
+                await writeLiveBackupToOPFS(
+                    message.transcript, message.meetingTitle, message.recordingStartTime
+                );
+                await writeLiveDiskFile(message.transcript, message.meetingTitle);
+                await chrome.storage.local.set({
+                    transcriptBackup: {
+                        transcript: message.transcript,
+                        meetingTitle: message.meetingTitle,
+                        recordingStartTime: message.recordingStartTime,
+                        lastBackup: new Date().toISOString(),
+                        attendeeData: message.attendeeData
+                    }
+                });
+                break;
+
+
+            case 'check_crash_backup':
+                if (!isCurrentlyCapturing) {
+                    const { liveBackupFileName: storedFile } = await chrome.storage.local.get('liveBackupFileName');
+                    if (storedFile) {
+                        try {
+                            const opfs = await navigator.storage.getDirectory();
+                            const fh = await opfs.getFileHandle(storedFile);
+                            const f = await fh.getFile();
+                            const data = JSON.parse(await f.text());
+                            sendResponse({
+                                hasBackup: true,
+                                captionCount: data.transcript?.length || 0,
+                                meetingTitle: data.meetingTitle,
+                                lastUpdated: data.lastUpdated
+                            });
+                        } catch {
+                            await chrome.storage.local.remove('liveBackupFileName');
+                            sendResponse({ hasBackup: false });
+                        }
+                    } else {
+                        sendResponse({ hasBackup: false });
+                    }
+                } else {
+                    sendResponse({ hasBackup: false });
+                }
+                return true;
+
+            case 'recover_crash_backup': {
+                const { liveBackupFileName: recoveryFile } = await chrome.storage.local.get('liveBackupFileName');
+                if (recoveryFile) {
+                    try {
+                        const opfs = await navigator.storage.getDirectory();
+                        const fh = await opfs.getFileHandle(recoveryFile);
+                        const f = await fh.getFile();
+                        const data = JSON.parse(await f.text());
+                        const { defaultSaveFormat } = await chrome.storage.sync.get('defaultSaveFormat');
+                        const { speakerAliases: recoveryAliases = {} } = await chrome.storage.session.get('speakerAliases');
+                        await saveTranscript(
+                            data.meetingTitle, data.transcript, recoveryAliases,
+                            defaultSaveFormat || 'txt', data.recordingStartTime, true, null
+                        );
+                        await cleanupLiveBackup();
+                        sendResponse({ success: true });
+                    } catch (e) {
+                        sendResponse({ success: false, error: e.message });
+                    }
+                } else {
+                    sendResponse({ success: false, error: 'No backup found' });
+                }
+                return true;
+            }
+
+            case 'dismiss_crash_backup':
+                await cleanupLiveBackup();
+                sendResponse({ success: true });
+                return true;
+
             case 'save_session_history':
                 // Save meeting to session history using chrome.storage directly
                 try {
@@ -389,7 +534,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     
                     await chrome.storage.local.set({ 'session_index': session_index });
                     console.log('[Service Worker] Session saved to history:', sessionId);
-                    
+                    // Session is now safely stored — remove the crash-recovery backup
+                    await cleanupLiveBackup();
                 } catch (error) {
                     console.error('[Service Worker] Failed to save session:', error);
                 }
@@ -425,10 +571,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         console.log(`Auto-saving transcript in ${formatToSave.toUpperCase()} format.`);
                         await saveTranscript(message.meetingTitle, message.transcriptArray, speakerAliases, formatToSave, message.recordingStartTime, false, message.attendeeReport);
                         console.log('Auto-save completed successfully.');
+                        // File downloaded — crash backup is no longer needed
+                        await cleanupLiveBackup();
                     }
                 } catch (error) {
                     console.error('Auto-save failed:', error);
-                    // Reset state on error to allow retry
                     lastAutoSaveId = null;
                 } finally {
                     autoSaveInProgress = false;
@@ -441,8 +588,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             
             case 'update_badge_status':
                 updateBadge(message.capturing);
-                // Reset auto-save state when starting a new capture session
+                isCurrentlyCapturing = message.capturing;
                 if (message.capturing) {
+                    // New session — reset all live file state so fresh files get created
+                    liveBackupFileName = null;
+                    liveDownloadFilename = null;
+                    lastDiskWriteTime = 0;
+                    await chrome.storage.local.remove('liveBackupFileName');
                     lastAutoSaveId = null;
                     autoSaveInProgress = false;
                     console.log('New capture session started, auto-save state reset.');

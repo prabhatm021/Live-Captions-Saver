@@ -731,11 +731,42 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// --- Crash Recovery ---
+async function checkCrashBackup() {
+    try {
+        const response = await chrome.runtime.sendMessage({ message: "check_crash_backup" });
+        if (!response?.hasBackup) return;
+
+        const panel = document.getElementById('crash-recovery');
+        const info = document.getElementById('crash-recovery-info');
+        const lastUpdated = new Date(response.lastUpdated).toLocaleString();
+        info.textContent = `"${response.meetingTitle}" — ${response.captionCount} captions (last saved: ${lastUpdated})`;
+        panel.style.display = 'block';
+
+        document.getElementById('recoverButton').addEventListener('click', async () => {
+            const result = await chrome.runtime.sendMessage({ message: "recover_crash_backup" });
+            if (result?.success) {
+                panel.style.display = 'none';
+            } else {
+                alert('Recovery failed: ' + (result?.error || 'unknown error'));
+            }
+        });
+
+        document.getElementById('dismissRecoveryButton').addEventListener('click', async () => {
+            await chrome.runtime.sendMessage({ message: "dismiss_crash_backup" });
+            panel.style.display = 'none';
+        });
+    } catch (error) {
+        // Silent — extension may have just been installed
+    }
+}
+
 // --- Initialization ---
 async function initializePopup() {
     await loadSettings();
     await loadCustomTemplates();
     setupEventListeners();
+    await checkCrashBackup();
     await initializeSessionHistory(); // Initialize session history
 
     const tab = await getActiveTeamsTab();

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Select Save Folder — Teams Captions Saver</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: #f4f4f4;
+            color: #333;
+        }
+        h2 { margin-bottom: 8px; }
+        p { color: #666; margin-bottom: 24px; }
+        button {
+            padding: 12px 28px;
+            font-size: 15px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        #status { margin-top: 20px; font-size: 14px; color: #555; }
+    </style>
+</head>
+<body>
+    <h2>Select Live Save Folder</h2>
+    <p>Captions will be written to a .txt file in this folder every 10&nbsp;seconds during meetings.</p>
+    <button id="pickBtn">Browse for Folder...</button>
+    <p id="status"></p>
+    <script src="picker.js"></script>
+</body>
+</html>

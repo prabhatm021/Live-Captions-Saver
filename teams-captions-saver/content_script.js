@@ -629,30 +629,21 @@ async function startCaptureSession() {
 }
 
 function startPeriodicBackup() {
-    // Clear any existing backup interval
     if (backupInterval) {
         clearInterval(backupInterval);
     }
-    
-    // Backup transcript every 30 seconds
-    backupInterval = setInterval(async () => {
+
+    backupInterval = setInterval(() => {
         if (transcriptArray.length > 0) {
-            try {
-                await chrome.storage.local.set({
-                    transcriptBackup: {
-                        transcript: transcriptArray,
-                        meetingTitle: meetingTitleOnStart,
-                        recordingStartTime: recordingStartTime ? recordingStartTime.toISOString() : null,
-                        lastBackup: new Date().toISOString(),
-                        attendeeData: attendeeData
-                    }
-                });
-                console.log(`[Teams Caption Saver] Backup saved: ${transcriptArray.length} entries`);
-            } catch (error) {
-                console.error("[Teams Caption Saver] Backup failed:", error);
-            }
+            chrome.runtime.sendMessage({
+                message: "backup_transcript",
+                transcript: transcriptArray,
+                meetingTitle: meetingTitleOnStart,
+                recordingStartTime: recordingStartTime ? recordingStartTime.toISOString() : null,
+                attendeeData: attendeeData
+            }).catch(() => {});
         }
-    }, 30000); // 30 seconds
+    }, 30000); // 30 seconds for OPFS crash backup; disk file written every 2 min (controlled in SW)
 }
 
 function stopCaptureSession() {
@@ -674,17 +665,14 @@ function stopCaptureSession() {
     
     // Final backup before stopping
     if (transcriptArray.length > 0) {
-        chrome.storage.local.set({
-            transcriptBackup: {
-                transcript: transcriptArray,
-                meetingTitle: meetingTitleOnStart,
-                recordingStartTime: recordingStartTime ? recordingStartTime.toISOString() : null,
-                lastBackup: new Date().toISOString(),
-                attendeeData: attendeeData
-            }
-        });
-        
-        // Save to session history when meeting ends (even if < 5 minutes)
+        chrome.runtime.sendMessage({
+            message: "backup_transcript",
+            transcript: transcriptArray,
+            meetingTitle: meetingTitleOnStart,
+            recordingStartTime: recordingStartTime ? recordingStartTime.toISOString() : null,
+            attendeeData: attendeeData
+        }).catch(() => {});
+
         saveToSessionHistory();
     }
     

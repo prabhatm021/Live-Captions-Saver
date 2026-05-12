@@ -374,6 +374,13 @@
 
     <p id="status-message">Checking status...</p>
 
+    <div id="crash-recovery" style="display:none; background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:10px; margin-top:12px; width:100%; box-sizing:border-box; text-align:left;">
+        <p style="margin:0 0 6px; font-size:13px; font-weight:600; color:#856404;">&#9888;&#65039; Unsaved session found</p>
+        <p id="crash-recovery-info" style="margin:0 0 8px; font-size:12px; color:#666;"></p>
+        <button id="recoverButton" style="padding:5px 12px; background:#ffc107; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600; color:#333;">Download Recovered Transcript</button>
+        <button id="dismissRecoveryButton" style="padding:5px 10px; background:none; border:1px solid #ccc; border-radius:4px; cursor:pointer; font-size:12px; color:#666; margin-left:6px;">Dismiss</button>
+    </div>
+
     <div class="button-container">
         <div class="split-button" id="copy-container">
             <button id="copyButton" class="split-button-main" disabled>Copy Transcript</button>
